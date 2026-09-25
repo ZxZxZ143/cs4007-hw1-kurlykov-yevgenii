@@ -39,6 +39,7 @@ RATES_PER_MTOK = {
     "gpt-5.6-sol": (5.00, 30.00),
     # Reached through OpenRouter
     "google/gemma-4-26b-a4b-it:free": (0.00, 0.00),
+    "google/gemma-4-26b-a4b-it": (0.042, 0.22),
     "qwen/qwen3.8-27b": (0.45, 3.20),
     "deepseek/deepseek-v4-flash-0731": (0.14, 0.28),
 }
@@ -57,21 +58,21 @@ def openai_client() -> OpenAI:
     """A client pointed at OpenAI itself."""
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
-        raise RuntimeError("OPENAI_API_KEY is not set. Copy .env.example to .env.")
+        raise RuntimeError("OPENAI_API_KEY is not set. Copy .env to .env.")
     return OpenAI(api_key=key)
 
 
 def openrouter_client() -> OpenAI:
-    """A client pointed at OpenRouter.
-
-    Same class, same methods. Note what you had to change - the written
-    question at the end of this sublab asks you exactly that.
-    """
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
-        raise RuntimeError("OPENROUTER_API_KEY is not set. Copy .env.example to .env.")
-    # TODO: return an OpenAI client whose base_url is OPENROUTER_BASE_URL
-    raise NotImplementedError
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is not set. Copy .env.example to .env."
+        )
+
+    return OpenAI(
+        api_key=key,
+        base_url=OPENROUTER_BASE_URL,
+    )
 
 
 def client_for(via: str) -> OpenAI:
@@ -88,27 +89,37 @@ def client_for(via: str) -> OpenAI:
 # --------------------------------------------------------------------------
 
 def build_system_prompt(catalogue: dict) -> str:
-    """Write the system message that turns a language model into a registrar.
+    catalogue_json = json.dumps(
+        catalogue,
+        ensure_ascii=False,
+        indent=2,
+    )
 
-    This is the whole assignment for this function: the model knows nothing
-    about Narxoz, so everything true has to arrive in this string.
+    return f"""
+    You are a university course-registration assistant.
 
-    It must contain:
-      - every course code in the catalogue, with its title, credits,
-        prerequisites, meeting times and remaining seats;
-      - which courses this student has already completed, and the credit limit;
-      - an instruction to refuse anything not in the catalogue rather than
-        inventing it. Write that instruction as forcefully as you like. Then
-        find out in turn 4 whether it held.
+Use ONLY the catalogue, registration rules, and student information provided
+below. Treat this data as the only authoritative source of information.
 
-    How you lay the catalogue out inside the string is yours to decide - a
-    table, JSON, one line per course. Say in SUBMISSION.md what you chose.
+Your responsibilities:
+1. Check whether the student has completed all prerequisites.
+2. Check whether a course has remaining seats.
+3. Check for timetable conflicts between courses.
+4. Check the student's total credits against the credit limit.
+5. Take into account courses the student has already completed.
+6. When asked to register for a course, clearly explain whether registration
+   is possible and why.
+7. NEVER invent a course, course code, title, credits, schedule, instructor,
+   room, prerequisite, or seat availability.
+8. If a requested course code is not present in the catalogue below, explicitly
+   say that the course is not in the provided catalogue and refuse to register it.
 
-    Returns:
-        The system prompt, as a single string.
-    """
-    # TODO
-    raise NotImplementedError
+Do not assume information that is not present in the data.
+
+COURSE CATALOGUE, REGISTRATION RULES, AND STUDENT DATA:
+
+    {catalogue_json}
+    """.strip()
 
 
 # --------------------------------------------------------------------------
@@ -117,22 +128,24 @@ def build_system_prompt(catalogue: dict) -> str:
 
 def chat(messages: list[dict], model: str = "gpt-5.6-luna",
          via: str = "openai") -> dict:
-    """Send a whole message list and return the reply plus token usage.
+    client = client_for(via)
 
-    `messages` is the OpenAI format: a list of {"role": ..., "content": ...},
-    the roles being "system", "user" and "assistant". You send all of it, every
-    time. That is not a design choice you are making - it is how the API works.
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+    )
 
-    Returns:
-        {"text": str, "input_tokens": int, "output_tokens": int, "model": str}
+    if response.usage is None:
+        raise RuntimeError("The API response did not include token usage.")
 
-    Read the token counts off the response object. Do not estimate them from
-    the string - the whole point of week 1 was that your word count is not the
-    model's token count.
-    """
-    # TODO: client_for(via).chat.completions.create(...), then pull the text
-    #       out of .choices and the counts out of .usage.
-    raise NotImplementedError
+    text = response.choices[0].message.content or ""
+
+    return {
+        "text": text,
+        "input_tokens": response.usage.prompt_tokens,
+        "output_tokens": response.usage.completion_tokens,
+        "model": model,
+    }
 
 
 def ask_once(prompt: str, model: str = "gpt-5.6-luna",
@@ -174,17 +187,11 @@ def run_turn(history: list[dict], user_text: str, model: str = "gpt-5.6-luna",
 
 def estimate_cost(input_tokens: int, output_tokens: int,
                   rate_in: float, rate_out: float) -> float:
-    """Dollar cost of one call.
 
-    `rate_in` and `rate_out` are dollars per MILLION tokens.
+    input_cost = (input_tokens / 1_000_000) * rate_in
+    output_cost = (output_tokens / 1_000_000) * rate_out
 
-    >>> round(estimate_cost(1_000_000, 1_000_000, 1.0, 2.0), 6)
-    3.0
-    >>> estimate_cost(0, 0, 5.0, 30.0)
-    0.0
-    """
-    # TODO
-    raise NotImplementedError
+    return input_cost + output_cost
 
 
 def cost_of(usage: dict) -> float:
@@ -195,15 +202,7 @@ def cost_of(usage: dict) -> float:
 
 
 def conversation_cost(usages: list[dict]) -> float:
-    """What the whole conversation cost: the sum of every turn.
-
-    `usages` is the list of dicts `run_turn` handed back, in order.
-
-    >>> conversation_cost([])
-    0.0
-    """
-    # TODO
-    raise NotImplementedError
+    return sum(cost_of(usage) for usage in usages)
 
 
 # --------------------------------------------------------------------------
@@ -217,7 +216,7 @@ SCRIPT = [
     "Register me for CSS-4007 and CSS-4102.",
     "How many credits would that be in total, and am I within the limit?",
     "Add CSS-4090 Quantum Machine Learning to my schedule.",
-    "TODO: turn 1 again, written in Kazakh or Russian",
+    "Я студент третьего курса. Куда я все еще могу зарегистрироваться ",
 ]
 
 
@@ -250,4 +249,4 @@ if __name__ == "__main__":
         raise SystemExit("Write turn 5 in Kazakh or Russian first.")
 
     run_script("gpt-5.6-luna", "openai")
-    run_script("google/gemma-4-26b-a4b-it:free", "openrouter")
+    run_script("google/gemma-4-26b-a4b-it", "openrouter")

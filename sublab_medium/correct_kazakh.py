@@ -21,7 +21,7 @@ DATA = Path(__file__).resolve().parent.parent / "data" / "kazakh_errors.json"
 
 # Every model you must run. Keep the order - it is the order of your table.
 MODELS = [
-    ("openrouter", "google/gemma-4-26b-a4b-it:free"),
+    ("openrouter", "google/gemma-4-26b-a4b-it"),
     ("openrouter", "qwen/qwen3.8-27b"),
     ("openrouter", "deepseek/deepseek-v4-flash-0731"),
     ("openai", "gpt-5.6-luna"),
@@ -36,62 +36,99 @@ def load_sentences() -> list[dict]:
 
 
 def build_prompt(corrupted: str) -> str:
-    """Ask for a corrected sentence AND a list of the changes made.
+    return f"""
+Correct the following Kazakh sentence.
 
-    Requirements:
-      - state that the text is Kazakh and may contain wrong letters, joined
-        words, or letters from the wrong alphabet;
-      - demand exactly this JSON and nothing else:
-            {"corrected": "...", "changes": ["...", "..."]}
-      - do not include the correct answer in the prompt. You are testing the
-        model, not your own typing.
+The text may contain:
+- Kazakh letters replaced by similar-looking Russian letters;
+- letters from the wrong alphabet;
+- accidentally joined words;
+- a missing hyphen;
+- duplicated letters.
 
-    Asking for a fixed shape instead of prose is how you make six models
-    comparable. Week 3 turns this into a topic.
-    """
-    # TODO
-    raise NotImplementedError
+Make only the minimum changes necessary to repair these corruptions.
+
+Important rules:
+- Preserve all punctuation that is not part of the corruption.
+- Do not add stylistic punctuation such as commas, periods, question marks,
+  colons, semicolons, or exclamation marks.
+- If a hyphen is missing because of the corruption, restore that hyphen.
+- Do not change capitalization unless a corrupted character itself requires it.
+- Do not rewrite words, change grammatical forms, change word order, or improve
+  the style of the sentence.
+- Do not make any correction that is unrelated to the corrupted text.
+
+Return EXACTLY one JSON object and nothing else in this format:
+{{"corrected": "...", "changes": ["...", "..."]}}
+
+In "corrected", return the corrected Kazakh sentence.
+In "changes", list only the corrections you actually made.
+
+Text:
+{corrupted}
+""".strip()
 
 
 def parse_response(text: str) -> dict:
-    """Pull {"corrected": str, "changes": list} out of the model's reply.
+    decoder = json.JSONDecoder()
 
-    Models wrap JSON in prose, or in ```json fences, more often than you would
-    like. Be forgiving: find the JSON, parse it, and raise ValueError with the
-    offending text if you truly cannot.
-    """
-    # TODO
-    raise NotImplementedError
+    for i, char in enumerate(text):
+        if char != "{":
+            continue
+
+        try:
+            parsed, _ = decoder.raw_decode(text[i:])
+        except json.JSONDecodeError:
+            continue
+
+        if not isinstance(parsed, dict):
+            continue
+
+        corrected = parsed.get("corrected")
+        changes = parsed.get("changes")
+
+        if isinstance(corrected, str) and isinstance(changes, list):
+            return {
+                "corrected": corrected,
+                "changes": changes,
+            }
+
+    raise ValueError(f"Could not find valid correction JSON in response: {text!r}")
 
 
 def correct_with(model: str, corrupted: str, via: str) -> dict:
-    """Send one sentence to one model.
+    prompt = build_prompt(corrupted)
 
-    Returns:
-        {"corrected": str, "changes": list, "input_tokens": int,
-         "output_tokens": int, "model": str}
+    response = ask_once(
+        prompt,
+        model=model,
+        via=via,
+    )
 
-    `via` is "openai" or "openrouter" and goes straight through to
-    `ask_once` from sublab_easy - there is no conversation here, just one
-    prompt and one reply, eight times per model.
-    """
-    # TODO
-    raise NotImplementedError
+    parsed = parse_response(response["text"])
+
+    return {
+        "corrected": parsed["corrected"],
+        "changes": parsed["changes"],
+        "input_tokens": response["input_tokens"],
+        "output_tokens": response["output_tokens"],
+        "model": response["model"],
+    }
 
 
 def score_correction(returned: str, expected: str) -> dict:
-    """Compare a model's output against the published original.
+    differing_positions = sum(
+        1
+        for returned_char, expected_char in zip(returned, expected)
+        if returned_char != expected_char
+    )
 
-    Returns {"exact": bool, "char_diff": int} where char_diff is the number of
-    differing characters (a simple positional comparison is enough; count the
-    length difference too).
+    length_difference = abs(len(returned) - len(expected))
 
-    READ THIS: `exact` is a signal, not a grade. Good Kazakh that differs from
-    the original still counts as a correction. Your written analysis is where
-    you make that call.
-    """
-    # TODO
-    raise NotImplementedError
+    return {
+        "exact": returned == expected,
+        "char_diff": differing_positions + length_difference,
+    }
 
 
 def run_all() -> list[dict]:
