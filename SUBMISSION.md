@@ -10,7 +10,14 @@
 State which AI tools you used and for what. Expected and fine; undisclosed use
 is not.
 
+>I used ChatGPT (GPT-5.6 Sol) to discuss the assignment requirements, help with Python implementation and debugging, and interpret the results of my experiments.
 >
+>Specifically, ChatGPT helped me draft and refine:
+>- the course-registration system prompt in Sublab Easy;
+>- the Kazakh correction prompt in Sublab Medium, including the instruction to preserve the original punctuation;
+>- the implementation and analysis for the tokenizer experiments in Sublab Harder.
+>
+>For the experiments themselves, I used the models required by the assignment through the OpenAI and OpenRouter APIs. The token counts, costs, model outputs, correction results, and tokenizer measurements reported in `SUBMISSION.md` come from my own program runs.
 
 ---
 
